@@ -31,6 +31,8 @@ export const createCheckoutSession = async (planId: string) => {
     const userId = session.user.id;
     const userEmail = session.user.email;
     
+    console.log('Creating checkout session for user:', userId);
+    
     // Get user profile data
     const { data: profileData } = await supabase
       .from('user_profiles')
@@ -45,8 +47,35 @@ export const createCheckoutSession = async (planId: string) => {
       .eq('id', planId)
       .single();
     
-    if (planError || !planData) {
-      throw new Error('Failed to retrieve plan details');
+    if (planError) {
+      console.error('Error fetching plan:', planError);
+      throw new Error(`Failed to retrieve plan details: ${planError.message}`);
+    }
+    
+    if (!planData) {
+      throw new Error('Plan not found');
+    }
+    
+    console.log('Plan data:', planData);
+    
+    // Check if user already has an active subscription
+    const { data: existingSubscription, error: subscriptionCheckError } = await supabase
+      .from('subscriptions')
+      .select('*')
+      .eq('user_id', userId)
+      .in('status', ['active', 'trialing'])
+      .maybeSingle();
+    
+    if (subscriptionCheckError) {
+      console.error('Error checking existing subscription:', subscriptionCheckError);
+    }
+    
+    if (existingSubscription) {
+      console.log('User already has an active subscription:', existingSubscription);
+      return { 
+        success: false, 
+        error: 'You already have an active subscription. Please manage it from your account page.' 
+      };
     }
     
     // For development/demo purposes, we'll simulate a Stripe checkout session
@@ -54,6 +83,8 @@ export const createCheckoutSession = async (planId: string) => {
     
     // If this is a free trial, handle it directly
     if (planData.trial_days > 0) {
+      console.log('Processing free trial for plan:', planData.name);
+      
       // Calculate trial end date
       const trialEndDate = new Date();
       trialEndDate.setDate(trialEndDate.getDate() + planData.trial_days);
@@ -72,11 +103,12 @@ export const createCheckoutSession = async (planId: string) => {
         });
       
       if (subscriptionError) {
-        throw new Error('Failed to create subscription');
+        console.error('Error creating subscription:', subscriptionError);
+        throw new Error(`Failed to create subscription: ${subscriptionError.message}`);
       }
       
       // Create payment history record for free trial
-      await supabase
+      const { error: paymentError } = await supabase
         .from('payment_history')
         .insert({
           user_id: userId,
@@ -86,6 +118,12 @@ export const createCheckoutSession = async (planId: string) => {
           payment_method: 'Free Trial'
         });
       
+      if (paymentError) {
+        console.error('Error creating payment history:', paymentError);
+        // Non-blocking error, we can continue
+      }
+      
+      console.log('Free trial subscription created successfully');
       return { success: true, redirectUrl: '/subscription/success' };
     }
     
@@ -113,6 +151,7 @@ export const createCheckoutSession = async (planId: string) => {
     
     // For demo purposes, we'll simulate a successful checkout
     // In a real app, this would redirect to Stripe Checkout
+    console.log('Processing paid subscription for plan:', planData.name);
     
     // Simulate payment processing delay
     await new Promise(resolve => setTimeout(resolve, 1500));
@@ -129,11 +168,12 @@ export const createCheckoutSession = async (planId: string) => {
       });
     
     if (subscriptionError) {
-      throw new Error('Failed to create subscription');
+      console.error('Error creating subscription:', subscriptionError);
+      throw new Error(`Failed to create subscription: ${subscriptionError.message}`);
     }
     
     // Create payment history record
-    await supabase
+    const { error: paymentError } = await supabase
       .from('payment_history')
       .insert({
         user_id: userId,
@@ -143,9 +183,19 @@ export const createCheckoutSession = async (planId: string) => {
         payment_method: 'Credit Card'
       });
     
+    if (paymentError) {
+      console.error('Error creating payment history:', paymentError);
+      // Non-blocking error, we can continue
+    }
+    
+    console.log('Paid subscription created successfully');
     return { success: true, redirectUrl: '/subscription/success' };
   } catch (error: any) {
     console.error('Error creating checkout session:', error);
-    return { success: false, error: error.message || 'Failed to create checkout session' };
+    return { 
+      success: false, 
+      error: error.message || 'Failed to create checkout session',
+      details: error.stack
+    };
   }
 }; 
